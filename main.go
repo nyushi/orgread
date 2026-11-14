@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/nyushi/orgread/internal/orgread"
 )
@@ -15,10 +16,21 @@ import (
 const usage = `Usage: orgread [--dir DIR] <command> [options] arguments
   toc  [--depth N] [--dir DIR] <note>
   get  [--max-bytes N] [--force] [--no-children] [--dir DIR] <note> <selector>
-  grep [-i] [-F] [--max N] [--files] [--dir DIR] <pattern> [note...]
+  grep [-i] [-F] [--max N] [--files] [--exclude-dir DIR] [--dir DIR] <pattern> [note...]
 Target directory: --dir, then ORGREAD_DIR, then .
+grep without notes skips directories named by --exclude-dir (repeatable) or
+ORGREAD_EXCLUDE_DIRS (comma-separated).
 Place command options before positional arguments. Use -- before arguments starting with -.
 `
+
+// stringListFlag collects a repeatable string flag such as --exclude-dir.
+type stringListFlag []string
+
+func (f *stringListFlag) String() string { return strings.Join(*f, ",") }
+func (f *stringListFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
 
 func main() {
 	os.Exit(run(os.Stdout, os.Stderr, os.Args[1:]))
@@ -56,6 +68,7 @@ func run(stdout, stderr io.Writer, args []string) int {
 	fs.StringVar(&dir, "dir", dir, "directory containing Org notes")
 	var depth, maxBytes, maxMatches int
 	var force, noChildren, ignoreCase, fixed, filesOnly bool
+	var excludeDirs stringListFlag
 	switch command {
 	case "toc":
 		fs.IntVar(&depth, "depth", math.MaxInt, "maximum heading level")
@@ -68,6 +81,7 @@ func run(stdout, stderr io.Writer, args []string) int {
 		fs.BoolVar(&fixed, "F", false, "match a literal substring")
 		fs.IntVar(&maxMatches, "max", 200, "maximum displayed matching lines")
 		fs.BoolVar(&filesOnly, "files", false, "show matching line counts per file")
+		fs.Var(&excludeDirs, "exclude-dir", "directory name to skip when searching without notes (repeatable)")
 	}
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -97,7 +111,18 @@ func run(stdout, stderr io.Writer, args []string) int {
 	if command == "grep" {
 		var files []orgread.SearchFile
 		if len(args) == 1 {
-			paths, err := resolver.Files()
+			exclude := map[string]bool{}
+			for _, name := range strings.Split(os.Getenv("ORGREAD_EXCLUDE_DIRS"), ",") {
+				if name = strings.TrimSpace(name); name != "" {
+					exclude[name] = true
+				}
+			}
+			for _, name := range excludeDirs {
+				if name = strings.TrimSpace(name); name != "" {
+					exclude[name] = true
+				}
+			}
+			paths, err := resolver.FilesExcluding(exclude)
 			if err != nil {
 				return fail(err)
 			}

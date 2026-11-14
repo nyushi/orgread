@@ -41,8 +41,24 @@ func TestCLI(t *testing.T) {
 			contains: []string{"*** README", "(親: 手順書)", "13行", "0.2KB"}},
 		{name: "empty toc", args: []string{"toc", "testdata/edges/empty.org"}, checkExact: true},
 		{name: "missing note", args: []string{"toc", "absent"}, code: 2, stderr: "見つかりません: absent", checkExact: true},
-		{name: "ambiguous note", args: []string{"toc", "20261018161214"}, code: 2,
-			stderr: "20261018161214-alpha.org\nnested/20261018161214-beta.org", checkExact: true},
+		{name: "prefix prefers direct note", args: []string{"toc", "20261018161214"},
+			contains: []string{"[1]", "L1-2", "* Alpha"}},
+		{name: "priority file name picks direct", args: []string{"get", "--dir", "testdata/priority", "same", "1"},
+			exact: "* 同名ルート\n:PROPERTIES:\n:ID: priority-same-id\n:END:\nルートの本文 needle\n", checkExact: true},
+		{name: "priority ID picks direct", args: []string{"get", "--dir", "testdata/priority", "priority-same-id", "1"},
+			exact: "* 同名ルート\n:PROPERTIES:\n:ID: priority-same-id\n:END:\nルートの本文 needle\n", checkExact: true},
+		{name: "priority prefix picks direct", args: []string{"get", "--dir", "testdata/priority", "sam", "1"},
+			exact: "* 同名ルート\n:PROPERTIES:\n:ID: priority-same-id\n:END:\nルートの本文 needle\n", checkExact: true},
+		{name: "priority nested only by name", args: []string{"get", "--dir", "testdata/priority", "only-now", "1"},
+			exact: "* nowだけ\nnowだけの本文 needle\n", checkExact: true},
+		{name: "priority same tier ambiguous", args: []string{"toc", "--dir", "testdata/priority", "report"}, code: 2,
+			stderr: "a/report.org\nb/report.org", checkExact: true},
+		{name: "grep exclude-dir", args: []string{"grep", "--dir", "testdata/priority", "--exclude-dir", "now", "needle"},
+			contains: []string{"same.org > 同名ルート : 5: ルートの本文 needle"}, excludes: []string{"now/"}},
+		{name: "grep exclude-dir repeated", args: []string{"grep", "--dir", "testdata/priority", "--exclude-dir", "now", "--exclude-dir", "a", "--exclude-dir", "b", "needle"},
+			contains: []string{"same.org > 同名ルート : 5:"}, excludes: []string{"now/", "report.org"}},
+		{name: "grep without exclude includes nested", args: []string{"grep", "--dir", "testdata/priority", "needle"},
+			contains: []string{"now/same.org > 同名now : 2:", "now/only-now.org > nowだけ : 2:", "same.org > 同名ルート : 5:"}},
 		{name: "ambiguous heading", args: []string{"get", "guide", "繰り返し"}, code: 2,
 			contains: []string{"[5]", "[6]", "L16-17", "L18-19"}, excludes: []string{"最初の本文", "次の本文"}, stderr: "見出しが曖昧"},
 		{name: "missing selector", args: []string{"get", "guide", "absent"}, code: 2, stderr: "節が見つかりません", checkExact: true},
@@ -70,7 +86,7 @@ func TestCLI(t *testing.T) {
 			exact: "20261018161214-alpha.org: 1件\nguide.org: 3件\nnested/20261018161214-beta.org: 1件\nnested/plain.org: 1件\n", checkExact: true},
 		{name: "grep no hits", args: []string{"grep", "absent-pattern"}, code: 1, checkExact: true},
 		{name: "grep invalid regex", args: []string{"grep", "["}, code: 2, stderr: "正規表現が無効", checkExact: true},
-		{name: "grep no partial output on resolution error", args: []string{"grep", "needle", "guide", "20261018161214"}, code: 2,
+		{name: "grep no partial output on resolution error", args: []string{"grep", "--dir", "testdata/priority", "needle", "same", "report"}, code: 2,
 			stderr: "ノートが曖昧", checkExact: true},
 		{name: "global directory", args: []string{"--dir", "testdata/edges", "toc", "headingless"},
 			contains: []string{"[1]", "L1-2", "2行", "(最初の見出しより前)"}},
@@ -188,6 +204,26 @@ func TestDefaultCurrentDirectory(t *testing.T) {
 	var out, stderr bytes.Buffer
 	if code := run(&out, &stderr, []string{"grep", "--files", "needle"}); code != 0 || !strings.Contains(out.String(), "testdata/notes/guide.org: 3件") {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, out.String(), stderr.String())
+	}
+}
+
+func TestGrepExcludeDirsEnv(t *testing.T) {
+	t.Setenv("ORGREAD_EXCLUDE_DIRS", "now")
+	var out, stderr bytes.Buffer
+	if code := run(&out, &stderr, []string{"grep", "--dir", "testdata/priority", "needle"}); code != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "same.org > 同名ルート : 5:") || strings.Contains(out.String(), "now/") {
+		t.Fatalf("ORGREAD_EXCLUDE_DIRS not applied: %q", out.String())
+	}
+	// The environment variable and repeated flags combine.
+	t.Setenv("ORGREAD_EXCLUDE_DIRS", "a, b")
+	out.Reset()
+	if code := run(&out, &stderr, []string{"grep", "--dir", "testdata/priority", "--exclude-dir", "now", "needle"}); code != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(out.String(), "now/") || strings.Contains(out.String(), "report.org") {
+		t.Fatalf("combined exclusions not applied: %q", out.String())
 	}
 }
 

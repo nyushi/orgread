@@ -24,7 +24,7 @@ func TestResolve(t *testing.T) {
 		{name: "recursive exact", arg: "plain", want: "nested/plain.org"},
 		{name: "prefix", arg: "20261018161214-a", want: "20261018161214-alpha.org"},
 		{name: "property ID", arg: "fictional-guide-id", want: "guide.org"},
-		{name: "ambiguous prefix", arg: "20261018161214", ambiguous: []string{"20261018161214-alpha.org", "nested/20261018161214-beta.org"}},
+		{name: "prefix prefers direct", arg: "20261018161214", want: "20261018161214-alpha.org"},
 		{name: "missing", arg: "nonexistent", missing: true},
 		{name: "hidden skipped", arg: "secret", missing: true},
 	} {
@@ -54,10 +54,17 @@ func TestResolve(t *testing.T) {
 func TestResolutionPrecedenceAndAmbiguity(t *testing.T) {
 	dir := t.TempDir()
 	for name, data := range map[string]string{
-		"name.org":           "* Exact\n",
-		"name-extra.org":     "* Prefix\n:ID: name\n:ID: shared\n",
-		"id.org":             "* ID\n  :iD: Unique-ID  \n:ID: shared\n",
-		"duplicate/name.org": "* Duplicate exact\n",
+		"alpha.org":           "* Root alpha\n",
+		"sub/alpha.org":       "* Sub alpha\n",
+		"beta.org":            "* File beta\n",
+		"holder.org":          "* Holder\n:ID: beta\n",
+		"mixed.org":           "* Mixed\n  :iD: Mixed-ID  \n",
+		"sub1/gamma.org":      "* Gamma 1\n",
+		"sub2/gamma.org":      "* Gamma 2\n",
+		"delta.org":           "* Root delta\n",
+		"sub/delta-extra.org": "* Sub delta extra\n",
+		"sub/epsilon-1.org":   "* Epsilon 1\n",
+		"sub2/epsilon-2.org":  "* Epsilon 2\n",
 	} {
 		path := filepath.Join(dir, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -71,10 +78,13 @@ func TestResolutionPrecedenceAndAmbiguity(t *testing.T) {
 		arg, want string
 		ambiguous bool
 	}{
-		{"name", "", true},
-		{"shared", "", true},
-		{"Unique-ID", "id.org", false},
-		{"name-e", "name-extra.org", false},
+		{"beta", "holder.org", false},             // :ID: tier beats file name tiers
+		{"Mixed-ID", "mixed.org", false},          // :ID: marker is case-insensitive
+		{"alpha", "alpha.org", false},             // direct exact beats nested exact
+		{"gamma", "", true},                       // same tier: two nested exact names
+		{"delt", "delta.org", false},              // prefix: direct tier first
+		{"delta-e", "sub/delta-extra.org", false}, // prefix: falls through to nested tier
+		{"epsilon", "", true},                     // same tier: two nested prefixes
 	} {
 		t.Run(tc.arg, func(t *testing.T) {
 			r := &Resolver{Dir: dir}
@@ -85,22 +95,66 @@ func TestResolutionPrecedenceAndAmbiguity(t *testing.T) {
 					t.Fatalf("expected two candidates, got %v", err)
 				}
 			} else if err != nil || r.Relative(path) != tc.want {
-				t.Fatalf("path = %q, error = %v", path, err)
+				t.Fatalf("path = %q, error = %v, want %q", path, err, tc.want)
 			}
 		})
 	}
-	if err := os.Remove(filepath.Join(dir, "duplicate", "name.org")); err != nil {
-		t.Fatal(err)
-	}
-	r := &Resolver{Dir: dir}
-	path, err := r.Resolve("name")
-	if err != nil || filepath.Base(path) != "name.org" {
-		t.Fatalf("exact must win over prefix and ID: %s, %v", path, err)
-	}
 	// An explicit path wins even when the target directory cannot be read.
-	r = &Resolver{Dir: filepath.Join(dir, "missing")}
-	if _, err := r.Resolve(filepath.Join(dir, "name.org")); err != nil {
+	r := &Resolver{Dir: filepath.Join(dir, "missing")}
+	if _, err := r.Resolve(filepath.Join(dir, "alpha.org")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The layout from the fix request: the same file name directly in the target
+// directory and in now/, where only the direct file has an :ID:.
+func TestResolvePriorityFixtures(t *testing.T) {
+	dir := filepath.Join("..", "..", "testdata", "priority")
+	for _, tc := range []struct {
+		name, arg, want string
+		ambiguous       []string
+	}{
+		{name: "file name picks direct", arg: "same", want: "same.org"},
+		{name: "file name with extension picks direct", arg: "same.org", want: "same.org"},
+		{name: "ID picks direct", arg: "priority-same-id", want: "same.org"},
+		{name: "prefix picks direct", arg: "sam", want: "same.org"},
+		{name: "nested only by name", arg: "only-now", want: "now/only-now.org"},
+		{name: "same tier exact is ambiguous", arg: "report", ambiguous: []string{"a/report.org", "b/report.org"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &Resolver{Dir: dir}
+			path, err := r.Resolve(tc.arg)
+			if tc.ambiguous != nil {
+				var ambiguity *AmbiguousNoteError
+				if !errors.As(err, &ambiguity) || !reflect.DeepEqual(ambiguity.Candidates, tc.ambiguous) {
+					t.Fatalf("ambiguity = %#v, error = %v", ambiguity, err)
+				}
+				return
+			}
+			if err != nil || r.Relative(path) != tc.want {
+				t.Fatalf("path = %q, error = %v, want %q", path, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestFilesExcluding(t *testing.T) {
+	r := &Resolver{Dir: filepath.Join("..", "..", "testdata", "priority")}
+	files, err := r.FilesExcluding(map[string]bool{"now": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rel []string
+	for _, path := range files {
+		rel = append(rel, r.Relative(path))
+	}
+	want := []string{"a/report.org", "b/report.org", "same.org"}
+	if !reflect.DeepEqual(rel, want) {
+		t.Fatalf("files = %v, want %v", rel, want)
+	}
+	// Exclusion must not hide files from note resolution.
+	if path, err := r.Resolve("only-now"); err != nil || r.Relative(path) != "now/only-now.org" {
+		t.Fatalf("resolution after exclusion: path = %q, error = %v", path, err)
 	}
 }
 

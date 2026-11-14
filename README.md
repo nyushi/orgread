@@ -33,7 +33,7 @@ temporary directory when building or testing.
 ```text
 orgread [--dir DIR] toc [--depth N] [--dir DIR] <note>
 orgread [--dir DIR] get [--max-bytes N] [--force] [--no-children] [--dir DIR] <note> <selector>
-orgread [--dir DIR] grep [-i] [-F] [--max N] [--files] [--dir DIR] <pattern> [note...]
+orgread [--dir DIR] grep [-i] [-F] [--max N] [--files] [--exclude-dir DIR] [--dir DIR] <pattern> [note...]
 ```
 
 Options must precede the positional arguments within each command, following
@@ -155,6 +155,13 @@ With no notes, search walks the target directory recursively for case-sensitive
 `*.org` names, skips hidden directories, does not follow directory symlinks,
 and sorts paths. Output names are paths relative to that directory.
 
+`--exclude-dir <name>` (repeatable) additionally skips directories with that
+base name, at any depth, when searching without explicit notes. The
+environment variable `ORGREAD_EXCLUDE_DIRS` (comma-separated) does the same;
+both sources combine. The target directory itself is never excluded, and
+exclusion does not affect note resolution: a note inside an excluded
+directory can still be named explicitly.
+
 `--max N` defaults to 200 displayed matches, but all matching lines across all
 files are counted. When limited, stdout ends with
 `全 <total> 件のうち <shown> 件を表示。--max で増やせる`.
@@ -178,26 +185,35 @@ directories are warned about and skipped.
 
 ## Note resolution
 
-`toc`, `get`, and explicit `grep` notes share this ordered resolution:
+`toc`, `get`, and explicit `grep` notes share this ordered resolution. The
+first tier that matches decides; only several matches **within the same tier**
+are ambiguous:
 
 1. A regular file path relative to the current working directory (or absolute),
-   then that path with `.org` appended. Explicit paths take precedence over
-   `--dir`, and can name files outside the target directory.
-2. An exact basename under the target directory, with `.org` optional.
-3. A basename prefix under that directory, for example `20261018161214-a`.
-4. An exact `:ID:` property value found anywhere in an Org file. Whitespace
+   then that path with `.org` appended. If the argument contains a path
+   separator, it is also tried relative to the target directory. Explicit
+   paths take precedence over `--dir`, and can name files outside the target
+   directory.
+2. An exact `:ID:` property value found anywhere in an Org file. Whitespace
    around the marker and value is ignored, and the `:ID:` marker is
    case-insensitive; the value remains case-sensitive.
+3. An exact file name directly in the target directory, with `.org` optional.
+4. An exact file name anywhere below the target directory.
+5. A file name prefix, first directly in the target directory, then below it.
 
-Steps 2–4 recurse over the same sorted `.org` list, skipping hidden directories.
-Filenames and prefixes are case-sensitive. Each stage gathers all matches and
-stops on either a unique result or ambiguity; later stages do not break ties.
-Ambiguous notes exit 2 and list relative candidate paths, one per line, on
-stderr. Missing notes report `見つかりません: <note>` on stderr and exit 2.
-Unreadable files encountered while scanning IDs are warned about and skipped.
+So when `same.org` exists both directly in the target directory and under
+`now/`, the direct file wins by name, by `:ID:` (only it has one), and by
+prefix, while a file that exists only under `now/` is still found by name.
+Tiers 2–5 scan the same sorted `.org` list, skipping hidden directories.
+Filenames and prefixes are case-sensitive. Ambiguous notes exit 2 and list
+relative candidate paths, one per line, on stderr. Missing notes report
+`見つかりません: <note>` on stderr and exit 2. Unreadable files encountered
+while scanning IDs are warned about and skipped.
 
 For the sample, `guide`, `guide.org`, and `fictional-guide-id` resolve to
-`guide.org`; `20261018161214` is ambiguous between the alpha and beta notes.
+`guide.org`; `20261018161214` resolves to the direct
+`20261018161214-alpha.org` because the prefix tier tries the target directory
+before subdirectories such as `nested/`.
 
 ## Parsing and implementation decisions
 
@@ -267,6 +283,8 @@ resolution precedence and ambiguity, search modes, output limits, and read
 failures. Root CLI tests exercise `run`, byte-for-byte `get` comparisons,
 directory precedence, help and errors, global numbering, the default 51200-byte
 limit, and output failures. Fixtures live in `testdata/blocks`, `testdata/edges`,
-and `testdata/notes`, including a hidden directory excluded from recursive search.
+`testdata/notes`, and `testdata/priority` (same-named notes directly in the
+target directory and under `now/`, for the resolution tiers and
+`--exclude-dir`), including a hidden directory excluded from recursive search.
 
 The examples above were captured from a built executable on these fixtures.

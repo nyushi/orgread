@@ -7,7 +7,13 @@ All files in `testdata/` contain fictional content.
 
 ## Install and build
 
-Requires Go 1.25 or newer. From this directory:
+Requires Go 1.25 or newer. Install directly from GitHub:
+
+```sh
+go install github.com/nyushi/orgread@latest
+```
+
+Or, from a local checkout of this repository:
 
 ```sh
 go install .

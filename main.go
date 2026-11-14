@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"orgread/internal/orgread"
+	"github.com/nyushi/orgread/internal/orgread"
 )
 
 const usage = `Usage: orgread [--dir DIR] <command> [options] arguments

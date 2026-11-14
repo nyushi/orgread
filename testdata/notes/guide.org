@@ -1,0 +1,19 @@
+#+title: 架空の手順書
+前書きです。
+* 手順書
+:PROPERTIES:
+:ID: fictional-guide-id
+:END:
+準備を確認。needle
+*** README
+Alpha needle
+#+begin_src text
+* 偽の見出し needle
+#+end_src
+本文 a.b
+** 確認
+NEEDLE を確認。
+* 繰り返し
+最初の本文。
+* 繰り返し
+次の本文。
